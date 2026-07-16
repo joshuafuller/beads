@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/steveyegge/beads/internal/types"
 )
 
 func TestValidateGraphApplyPlanAcceptsCustomTypes(t *testing.T) {
@@ -17,7 +19,7 @@ func TestValidateGraphApplyPlanAcceptsCustomTypes(t *testing.T) {
 			{Key: "spec", Title: "Step spec", Type: "spec"},
 		},
 	}
-	if err := validateGraphApplyPlan(plan, []string{"spec"}); err != nil {
+	if err := validateGraphApplyPlan(plan, []string{"spec"}, nil); err != nil {
 		t.Fatalf("expected custom type %q to validate, got %v", "spec", err)
 	}
 }
@@ -28,7 +30,7 @@ func TestValidateGraphApplyPlanRejectsTypeWhenCustomTypesAbsent(t *testing.T) {
 			{Key: "spec", Title: "Step spec", Type: "spec"},
 		},
 	}
-	err := validateGraphApplyPlan(plan, nil)
+	err := validateGraphApplyPlan(plan, nil, nil)
 	if err == nil {
 		t.Fatal("expected custom type to fail when nil customTypes")
 	}
@@ -44,7 +46,7 @@ func TestValidateGraphApplyPlanRejectsInvalidTypes(t *testing.T) {
 			{Key: "root", Title: "Root", Type: "definitely-not-a-type"},
 		},
 	}
-	err := validateGraphApplyPlan(plan, nil)
+	err := validateGraphApplyPlan(plan, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid type")
 	}
@@ -61,7 +63,7 @@ func TestValidateGraphApplyPlanAcceptsBuiltInTypes(t *testing.T) {
 				{Key: "n1", Title: "Node", Type: typ},
 			},
 		}
-		if err := validateGraphApplyPlan(plan, nil); err != nil {
+		if err := validateGraphApplyPlan(plan, nil, nil); err != nil {
 			t.Errorf("type %q rejected: %v", typ, err)
 		}
 	}
@@ -73,7 +75,7 @@ func TestValidateGraphApplyPlanAcceptsEmptyType(t *testing.T) {
 			{Key: "n1", Title: "Node", Type: ""},
 		},
 	}
-	if err := validateGraphApplyPlan(plan, nil); err != nil {
+	if err := validateGraphApplyPlan(plan, nil, nil); err != nil {
 		t.Fatalf("empty type rejected: %v", err)
 	}
 }
@@ -101,7 +103,7 @@ func TestValidateGraphApplyPlanAcceptsNewFields(t *testing.T) {
 			},
 		},
 	}
-	if err := validateGraphApplyPlan(plan, nil); err != nil {
+	if err := validateGraphApplyPlan(plan, nil, nil); err != nil {
 		t.Fatalf("unexpected validation error: %v", err)
 	}
 }
@@ -115,7 +117,7 @@ func TestValidateGraphApplyPlanRejectsNegativeEstimate(t *testing.T) {
 			{Key: "n", Title: "Node", Estimate: &neg},
 		},
 	}
-	err := validateGraphApplyPlan(plan, nil)
+	err := validateGraphApplyPlan(plan, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for negative estimate")
 	}
@@ -132,7 +134,7 @@ func TestValidateGraphApplyPlanRejectsEmptyDepTarget(t *testing.T) {
 			{Key: "n", Title: "Node", Deps: []GraphApplyNodeDep{{Target: ""}}},
 		},
 	}
-	err := validateGraphApplyPlan(plan, nil)
+	err := validateGraphApplyPlan(plan, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for empty dep target")
 	}
@@ -150,7 +152,7 @@ func TestValidateGraphApplyPlanParentAliasResolvesCorrectly(t *testing.T) {
 			{Key: "child", Title: "Child", Parent: "root"},
 		},
 	}
-	if err := validateGraphApplyPlan(plan, nil); err != nil {
+	if err := validateGraphApplyPlan(plan, nil, nil); err != nil {
 		t.Fatalf("parent alias should resolve: %v", err)
 	}
 }
@@ -163,7 +165,7 @@ func TestValidateGraphApplyPlanParentAliasRejectsUnknownKey(t *testing.T) {
 			{Key: "child", Title: "Child", Parent: "nonexistent"},
 		},
 	}
-	err := validateGraphApplyPlan(plan, nil)
+	err := validateGraphApplyPlan(plan, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for unknown parent key via alias")
 	}
@@ -401,7 +403,7 @@ func TestValidateGraphApplyPlanRejectsLocalBlockingCycle(t *testing.T) {
 		},
 	}
 
-	err := validateGraphApplyPlan(plan, nil)
+	err := validateGraphApplyPlan(plan, nil, nil)
 	if err == nil {
 		t.Fatal("expected local graph cycle to be rejected")
 	}
@@ -424,7 +426,7 @@ func TestValidateGraphApplyPlanReportsDeterministicCycleNode(t *testing.T) {
 		},
 	}
 
-	err := validateGraphApplyPlan(plan, nil)
+	err := validateGraphApplyPlan(plan, nil, nil)
 	if err == nil {
 		t.Fatal("expected local graph cycle to be rejected")
 	}
@@ -445,7 +447,7 @@ func TestValidateGraphApplyPlanAllowsNonBlockingLocalCycle(t *testing.T) {
 		},
 	}
 
-	if err := validateGraphApplyPlan(plan, nil); err != nil {
+	if err := validateGraphApplyPlan(plan, nil, nil); err != nil {
 		t.Fatalf("non-blocking cycle rejected: %v", err)
 	}
 }
@@ -461,7 +463,7 @@ func TestValidateGraphApplyPlanRejectsImplicitParentChildReverseBlockingCycle(t 
 		},
 	}
 
-	err := validateGraphApplyPlan(plan, nil)
+	err := validateGraphApplyPlan(plan, nil, nil)
 	if err == nil {
 		t.Fatal("expected implicit parent-child plus reverse blocking edge to be rejected")
 	}
@@ -482,7 +484,7 @@ func TestValidateGraphApplyPlanIgnoresIDOverridesForLocalCycleValidation(t *test
 		},
 	}
 
-	if err := validateGraphApplyPlan(plan, nil); err != nil {
+	if err := validateGraphApplyPlan(plan, nil, nil); err != nil {
 		t.Fatalf("ID override edge should not be treated as a local key cycle: %v", err)
 	}
 }
@@ -656,5 +658,186 @@ func TestCreateIssuesFromGraph_DryRunDoesNotPersist(t *testing.T) {
 	}
 	if result.ParentDeps != 1 {
 		t.Errorf("parent_deps = %d, want 1", result.ParentDeps)
+	}
+}
+
+// singleNodePlanErr validates a one-node plan built by mutate and returns the
+// validation error (nil when the plan is accepted).
+func singleNodePlanErr(customStatuses []string, mutate func(*GraphApplyNode)) error {
+	node := GraphApplyNode{Key: "a", Title: "A"}
+	mutate(&node)
+	plan := &GraphApplyPlan{Nodes: []GraphApplyNode{node}}
+	return validateGraphApplyPlan(plan, nil, customStatuses)
+}
+
+func TestValidateGraphApplyPlanNodeFieldRules(t *testing.T) {
+	neg := -5
+	on := true
+	cases := []struct {
+		name           string
+		customStatuses []string
+		mutate         func(*GraphApplyNode)
+		wantErr        string
+	}{
+		{name: "invalid status", mutate: func(n *GraphApplyNode) { n.Status = "bogus" }, wantErr: "invalid status"},
+		{name: "builtin status accepted", mutate: func(n *GraphApplyNode) { n.Status = "in_progress" }},
+		{name: "custom status accepted", customStatuses: []string{"triage"}, mutate: func(n *GraphApplyNode) { n.Status = "triage" }},
+		{name: "custom status rejected without config", mutate: func(n *GraphApplyNode) { n.Status = "triage" }, wantErr: "invalid status"},
+		{name: "negative estimate", mutate: func(n *GraphApplyNode) { n.EstimatedMinutes = &neg }, wantErr: "estimated_minutes"},
+		{name: "invalid wisp_type", mutate: func(n *GraphApplyNode) { n.WispType = "bogus" }, wantErr: "invalid wisp_type"},
+		{name: "valid wisp_type", mutate: func(n *GraphApplyNode) { n.WispType = "heartbeat" }},
+		{name: "invalid mol_type", mutate: func(n *GraphApplyNode) { n.MolType = "bogus" }, wantErr: "invalid mol_type"},
+		{name: "valid mol_type", mutate: func(n *GraphApplyNode) { n.MolType = "swarm" }},
+		{name: "event fields require event type", mutate: func(n *GraphApplyNode) { n.EventKind = "agent.started" }, wantErr: "require type"},
+		{name: "event fields on event node", mutate: func(n *GraphApplyNode) {
+			n.Type = "event"
+			n.EventKind = "agent.started"
+			n.Actor = "x"
+			n.Target = "y"
+			n.Payload = "{}"
+		}},
+		{name: "node-level ephemeral+no_history conflict", mutate: func(n *GraphApplyNode) { n.Ephemeral = &on; n.NoHistory = &on }, wantErr: "mutually exclusive"},
+		{name: "bad explicit id format", mutate: func(n *GraphApplyNode) { n.ID = "nohyphen" }, wantErr: "invalid ID format"},
+		{name: "valid explicit id", mutate: func(n *GraphApplyNode) { n.ID = "bd-a1b2c3" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := singleNodePlanErr(tc.customStatuses, tc.mutate)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected plan to validate, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestValidateGraphApplyPlanRejectsDuplicateExplicitIDs(t *testing.T) {
+	plan := &GraphApplyPlan{
+		Nodes: []GraphApplyNode{
+			{Key: "a", Title: "A", ID: "bd-a1b2c3"},
+			{Key: "b", Title: "B", ID: "bd-a1b2c3"},
+		},
+	}
+	err := validateGraphApplyPlan(plan, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "duplicate explicit id") {
+		t.Fatalf("expected duplicate explicit id error, got %v", err)
+	}
+}
+
+func TestValidateGraphApplyPlanEdgeGateRules(t *testing.T) {
+	twoNodes := []GraphApplyNode{
+		{Key: "gate", Title: "Gate"},
+		{Key: "spawner", Title: "Spawner"},
+	}
+	cases := []struct {
+		name    string
+		edge    GraphApplyEdge
+		wantErr string
+	}{
+		{name: "gate requires waits-for", edge: GraphApplyEdge{FromKey: "gate", ToKey: "spawner", Type: "blocks", Gate: "all-children"}, wantErr: "require type"},
+		{name: "gate defaults-to-blocks edge rejected", edge: GraphApplyEdge{FromKey: "gate", ToKey: "spawner", Gate: "all-children"}, wantErr: "require type"},
+		{name: "invalid gate value", edge: GraphApplyEdge{FromKey: "gate", ToKey: "spawner", Type: "waits-for", Gate: "bogus"}, wantErr: "invalid gate"},
+		{name: "spawner_key and spawner_id conflict", edge: GraphApplyEdge{FromKey: "gate", ToKey: "spawner", Type: "waits-for", SpawnerKey: "spawner", SpawnerID: "bd-x"}, wantErr: "cannot specify both"},
+		{name: "unknown spawner_key", edge: GraphApplyEdge{FromKey: "gate", ToKey: "spawner", Type: "waits-for", SpawnerKey: "ghost"}, wantErr: "spawner key"},
+		{name: "valid gated waits-for edge", edge: GraphApplyEdge{FromKey: "gate", ToKey: "spawner", Type: "waits-for", Gate: "any-children", SpawnerKey: "spawner"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := &GraphApplyPlan{Nodes: twoNodes, Edges: []GraphApplyEdge{tc.edge}}
+			err := validateGraphApplyPlan(plan, nil, nil)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected plan to validate, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestGraphApplyEdgeDependencyGateMetadata(t *testing.T) {
+	resolve := func(key string) string {
+		return map[string]string{"spawner": "bd-spawn1"}[key]
+	}
+
+	t.Run("gate and spawner_key resolve into waits-for metadata", func(t *testing.T) {
+		edge := GraphApplyEdge{Type: "waits-for", Gate: "any-children", SpawnerKey: "spawner"}
+		dep, err := graphApplyEdgeDependency(edge, "bd-from", "bd-to", "waits-for", resolve)
+		if err != nil {
+			t.Fatalf("graphApplyEdgeDependency: %v", err)
+		}
+		var meta types.WaitsForMeta
+		if err := json.Unmarshal([]byte(dep.Metadata), &meta); err != nil {
+			t.Fatalf("metadata not valid WaitsForMeta JSON: %v", err)
+		}
+		if meta.Gate != types.WaitsForAnyChildren || meta.SpawnerID != "bd-spawn1" {
+			t.Errorf("meta = %+v, want any-children gate with resolved spawner", meta)
+		}
+	})
+
+	t.Run("gate defaults to all-children when spawner is set", func(t *testing.T) {
+		edge := GraphApplyEdge{Type: "waits-for", SpawnerID: "bd-ext1"}
+		dep, err := graphApplyEdgeDependency(edge, "bd-from", "bd-to", "waits-for", resolve)
+		if err != nil {
+			t.Fatalf("graphApplyEdgeDependency: %v", err)
+		}
+		var meta types.WaitsForMeta
+		if err := json.Unmarshal([]byte(dep.Metadata), &meta); err != nil {
+			t.Fatalf("metadata not valid WaitsForMeta JSON: %v", err)
+		}
+		if meta.Gate != types.WaitsForAllChildren || meta.SpawnerID != "bd-ext1" {
+			t.Errorf("meta = %+v, want all-children default with explicit spawner", meta)
+		}
+	})
+
+	t.Run("plain edge carries no metadata and passes thread_id", func(t *testing.T) {
+		edge := GraphApplyEdge{Type: "replies-to", ThreadID: "thread-9"}
+		dep, err := graphApplyEdgeDependency(edge, "bd-from", "bd-to", "replies-to", resolve)
+		if err != nil {
+			t.Fatalf("graphApplyEdgeDependency: %v", err)
+		}
+		if dep.Metadata != "" {
+			t.Errorf("Metadata = %q, want empty for ungated edge", dep.Metadata)
+		}
+		if dep.ThreadID != "thread-9" {
+			t.Errorf("ThreadID = %q, want thread-9", dep.ThreadID)
+		}
+	})
+}
+
+// TestGraphApplyNodeCoversCreateIssueParams pins full issue-model parity
+// between single-issue `bd create` and graph plans: every createIssueParams
+// field must be addressable from a GraphApplyNode or listed here with a
+// reason. This keeps the schema gap from silently reopening as create grows.
+func TestGraphApplyNodeCoversCreateIssueParams(t *testing.T) {
+	renamed := map[string]string{
+		"IssueType":     "Type",
+		"InitialStatus": "Status",
+	}
+	excluded := map[string]string{
+		"CreatedBy": "always the ambient actor identity; plans do not impersonate creators",
+	}
+
+	nodeType := reflect.TypeOf(GraphApplyNode{})
+	paramsType := reflect.TypeOf(createIssueParams{})
+	for i := 0; i < paramsType.NumField(); i++ {
+		name := paramsType.Field(i).Name
+		if _, ok := excluded[name]; ok {
+			continue
+		}
+		if alias, ok := renamed[name]; ok {
+			name = alias
+		}
+		if _, ok := nodeType.FieldByName(name); !ok {
+			t.Errorf("createIssueParams field %q is not addressable from graph plans; add it to GraphApplyNode (or the exclusion list with a reason)", name)
+		}
 	}
 }

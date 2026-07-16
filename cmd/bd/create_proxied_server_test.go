@@ -117,12 +117,20 @@ func TestBuildCreateIssueFromInput_ExplicitStatusWinsOverDefer(t *testing.T) {
 	}
 }
 
-func TestMaterializeGraphNodeIssue_DefaultsAndOpts(t *testing.T) {
+// nodeIssueFromInput mirrors buildDomainGraphPlan's per-node materialization
+// so unit tests can exercise graphApplyNodeIssue with createInput-level opts.
+func nodeIssueFromInput(t *testing.T, node GraphApplyNode, in createInput) *types.Issue {
+	t.Helper()
+	issue, err := graphApplyNodeIssue(node, GraphApplyOptions{Ephemeral: in.ephemeral, NoHistory: in.noHistory}, in.createdBy, in.owner)
+	if err != nil {
+		t.Fatalf("graphApplyNodeIssue: %v", err)
+	}
+	return issue
+}
+
+func TestGraphApplyNodeIssue_DefaultsAndOpts(t *testing.T) {
 	t.Run("type and priority defaults", func(t *testing.T) {
-		issue, err := materializeGraphNodeIssue(GraphApplyNode{Key: "n", Title: "N"}, createInput{createdBy: "t"})
-		if err != nil {
-			t.Fatalf("materializeGraphNodeIssue: %v", err)
-		}
+		issue := nodeIssueFromInput(t, GraphApplyNode{Key: "n", Title: "N"}, createInput{createdBy: "t"})
 		if issue.IssueType != types.TypeTask {
 			t.Errorf("type default = %q, want task", issue.IssueType)
 		}
@@ -136,12 +144,9 @@ func TestMaterializeGraphNodeIssue_DefaultsAndOpts(t *testing.T) {
 
 	t.Run("explicit priority and type", func(t *testing.T) {
 		p := 0
-		issue, err := materializeGraphNodeIssue(GraphApplyNode{
+		issue := nodeIssueFromInput(t, GraphApplyNode{
 			Key: "n", Title: "N", Type: "bug", Priority: &p,
 		}, createInput{})
-		if err != nil {
-			t.Fatalf("materializeGraphNodeIssue: %v", err)
-		}
 		if issue.IssueType != types.TypeBug {
 			t.Errorf("type = %q, want bug", issue.IssueType)
 		}
@@ -151,64 +156,120 @@ func TestMaterializeGraphNodeIssue_DefaultsAndOpts(t *testing.T) {
 	})
 
 	t.Run("ephemeral and no-history propagate", func(t *testing.T) {
-		issue, err := materializeGraphNodeIssue(GraphApplyNode{Key: "n", Title: "N"}, createInput{
+		issue := nodeIssueFromInput(t, GraphApplyNode{Key: "n", Title: "N"}, createInput{
 			ephemeral: true,
 			noHistory: false,
 		})
-		if err != nil {
-			t.Fatalf("materializeGraphNodeIssue: %v", err)
-		}
 		if !issue.Ephemeral {
 			t.Errorf("ephemeral not propagated")
 		}
-		issue2, err := materializeGraphNodeIssue(GraphApplyNode{Key: "n", Title: "N"}, createInput{
+		issue2 := nodeIssueFromInput(t, GraphApplyNode{Key: "n", Title: "N"}, createInput{
 			noHistory: true,
 		})
-		if err != nil {
-			t.Fatalf("materializeGraphNodeIssue: %v", err)
-		}
 		if !issue2.NoHistory {
 			t.Errorf("no_history not propagated")
 		}
 	})
 
-	t.Run("metadata marshalled to JSON", func(t *testing.T) {
-		issue, err := materializeGraphNodeIssue(GraphApplyNode{
-			Key: "n", Title: "N",
-			Metadata: map[string]string{"a": "1", "b": "2"},
-		}, createInput{})
-		if err != nil {
-			t.Fatalf("materializeGraphNodeIssue: %v", err)
+	t.Run("per-node storage class overrides plan flags", func(t *testing.T) {
+		off := false
+		issue := nodeIssueFromInput(t, GraphApplyNode{Key: "n", Title: "N", Ephemeral: &off}, createInput{
+			ephemeral: true,
+		})
+		if issue.Ephemeral {
+			t.Errorf("node-level ephemeral=false should override --ephemeral")
 		}
-		var roundTrip map[string]string
+		on := true
+		issue2 := nodeIssueFromInput(t, GraphApplyNode{Key: "n", Title: "N", NoHistory: &on}, createInput{})
+		if !issue2.NoHistory {
+			t.Errorf("node-level no_history=true not applied")
+		}
+	})
+
+	t.Run("conflicting effective storage class errors", func(t *testing.T) {
+		on := true
+		_, err := graphApplyNodeIssue(GraphApplyNode{Key: "n", Title: "N", NoHistory: &on}, GraphApplyOptions{Ephemeral: true}, "", "")
+		if err == nil {
+			t.Fatal("expected error for effective ephemeral+no_history")
+		}
+	})
+
+	t.Run("metadata marshalled to JSON", func(t *testing.T) {
+		issue := nodeIssueFromInput(t, GraphApplyNode{
+			Key: "n", Title: "N",
+			Metadata: map[string]json.RawMessage{"a": json.RawMessage(`"1"`), "b": json.RawMessage(`2`)},
+		}, createInput{})
+		var roundTrip map[string]any
 		if err := json.Unmarshal(issue.Metadata, &roundTrip); err != nil {
 			t.Fatalf("metadata not valid JSON: %v", err)
 		}
-		if roundTrip["a"] != "1" || roundTrip["b"] != "2" {
+		if roundTrip["a"] != "1" || roundTrip["b"] != float64(2) {
 			t.Errorf("metadata round-trip wrong: %v", roundTrip)
 		}
 	})
 
 	t.Run("empty metadata leaves Metadata nil", func(t *testing.T) {
-		issue, err := materializeGraphNodeIssue(GraphApplyNode{Key: "n", Title: "N"}, createInput{})
-		if err != nil {
-			t.Fatalf("materializeGraphNodeIssue: %v", err)
-		}
+		issue := nodeIssueFromInput(t, GraphApplyNode{Key: "n", Title: "N"}, createInput{})
 		if issue.Metadata != nil {
 			t.Errorf("Metadata = %s, want nil for empty input", string(issue.Metadata))
 		}
 	})
 
 	t.Run("identity fields copied", func(t *testing.T) {
-		issue, err := materializeGraphNodeIssue(GraphApplyNode{Key: "n", Title: "N"}, createInput{
+		issue := nodeIssueFromInput(t, GraphApplyNode{Key: "n", Title: "N"}, createInput{
 			createdBy: "alice",
 			owner:     "alice@example.com",
 		})
-		if err != nil {
-			t.Fatalf("materializeGraphNodeIssue: %v", err)
-		}
 		if issue.CreatedBy != "alice" || issue.Owner != "alice@example.com" {
 			t.Errorf("identity copy wrong: %q / %q", issue.CreatedBy, issue.Owner)
+		}
+	})
+
+	t.Run("node owner overrides ambient owner", func(t *testing.T) {
+		issue := nodeIssueFromInput(t, GraphApplyNode{Key: "n", Title: "N", Owner: "bob@example.com"}, createInput{
+			owner: "alice@example.com",
+		})
+		if issue.Owner != "bob@example.com" {
+			t.Errorf("Owner = %q, want node override", issue.Owner)
+		}
+	})
+
+	t.Run("native content and planning fields copied", func(t *testing.T) {
+		est := 90
+		issue := nodeIssueFromInput(t, GraphApplyNode{
+			Key: "n", Title: "N",
+			Design:             "d",
+			AcceptanceCriteria: "ac",
+			Notes:              "notes",
+			SpecID:             "spec-1",
+			ExternalRef:        "gh-9",
+			EstimatedMinutes:   &est,
+			WispType:           "heartbeat",
+			MolType:            "swarm",
+			Pinned:             true,
+			Status:             "in_progress",
+			ID:                 "bd-abc123",
+		}, createInput{})
+		if issue.Design != "d" || issue.AcceptanceCriteria != "ac" || issue.Notes != "notes" || issue.SpecID != "spec-1" {
+			t.Errorf("content fields lost: %+v", issue)
+		}
+		if issue.ExternalRef == nil || *issue.ExternalRef != "gh-9" {
+			t.Errorf("ExternalRef = %v", issue.ExternalRef)
+		}
+		if issue.EstimatedMinutes == nil || *issue.EstimatedMinutes != 90 {
+			t.Errorf("EstimatedMinutes = %v", issue.EstimatedMinutes)
+		}
+		if issue.WispType != types.WispType("heartbeat") || issue.MolType != types.MolType("swarm") {
+			t.Errorf("wisp/mol type lost: %q %q", issue.WispType, issue.MolType)
+		}
+		if !issue.Pinned {
+			t.Errorf("Pinned lost")
+		}
+		if issue.Status != types.StatusInProgress {
+			t.Errorf("Status = %q, want in_progress", issue.Status)
+		}
+		if issue.ID != "bd-abc123" {
+			t.Errorf("ID = %q, want explicit ID", issue.ID)
 		}
 	})
 }
@@ -227,11 +288,14 @@ func TestBuildDomainGraphPlan(t *testing.T) {
 		},
 	}
 
-	got, err := buildDomainGraphPlan(plan, createInput{createdBy: "t"})
+	got, useWisp, err := buildDomainGraphPlan(plan, createInput{createdBy: "t"})
 	if err != nil {
 		t.Fatalf("buildDomainGraphPlan: %v", err)
 	}
 
+	if useWisp {
+		t.Errorf("useWisp = true for a durable plan")
+	}
 	if len(got.Nodes) != 2 {
 		t.Fatalf("nodes len = %d", len(got.Nodes))
 	}

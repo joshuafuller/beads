@@ -392,7 +392,7 @@ func runCreateProxiedGraph(_ *cobra.Command, ctx context.Context, in createInput
 		if err != nil {
 			return HandleError("load create context: %v", err)
 		}
-		if err := validateGraphApplyPlan(&plan, resolveProxiedCustomTypes(cctx.CustomTypes)); err != nil {
+		if err := validateGraphApplyPlan(&plan, resolveProxiedCustomTypes(cctx.CustomTypes), config.GetCustomStatusesFromYAML()); err != nil {
 			return HandleError("invalid graph plan: %v", err)
 		}
 		if err := emitGraphApplyDryRun(&plan); err != nil {
@@ -401,7 +401,7 @@ func runCreateProxiedGraph(_ *cobra.Command, ctx context.Context, in createInput
 		return nil
 	}
 
-	domainPlan, err := buildDomainGraphPlan(plan, in)
+	domainPlan, useWisp, err := buildDomainGraphPlan(plan, in)
 	if err != nil {
 		return err
 	}
@@ -417,13 +417,13 @@ func runCreateProxiedGraph(_ *cobra.Command, ctx context.Context, in createInput
 			return nil, "", fmt.Errorf("load create context: %w", err)
 		}
 
-		if err := validateGraphApplyPlan(&plan, resolveProxiedCustomTypes(cctx.CustomTypes)); err != nil {
+		if err := validateGraphApplyPlan(&plan, resolveProxiedCustomTypes(cctx.CustomTypes), config.GetCustomStatusesFromYAML()); err != nil {
 			return nil, "", fmt.Errorf("invalid graph plan: %w", err)
 		}
 
 		var result domain.GraphApplyResult
 		var applyErr error
-		if in.ephemeral {
+		if useWisp {
 			result, applyErr = uw.IssueUseCase().ApplyWispGraph(ctx, domainPlan, in.createdBy)
 		} else {
 			result, applyErr = uw.IssueUseCase().ApplyIssueGraph(ctx, domainPlan, in.createdBy)
@@ -458,12 +458,25 @@ func runCreateProxiedGraph(_ *cobra.Command, ctx context.Context, in createInput
 	return nil
 }
 
-func buildDomainGraphPlan(plan GraphApplyPlan, in createInput) (domain.GraphPlan, error) {
+// buildDomainGraphPlan materializes every plan node through the shared
+// graphApplyNodeIssue path (full issue-model parity with `bd create`) and
+// returns whether the plan routes to the wisps table. Domain graph creation
+// routes the whole plan to a single table, so per-node storage-class
+// overrides must be uniform in proxied-server mode.
+func buildDomainGraphPlan(plan GraphApplyPlan, in createInput) (domain.GraphPlan, bool, error) {
+	opts := GraphApplyOptions{Ephemeral: in.ephemeral, NoHistory: in.noHistory}
+	var useWisp bool
 	nodes := make([]domain.GraphNode, 0, len(plan.Nodes))
-	for _, n := range plan.Nodes {
-		issue, err := materializeGraphNodeIssue(n, in)
+	for i, n := range plan.Nodes {
+		issue, err := graphApplyNodeIssue(n, opts, in.createdBy, in.owner)
 		if err != nil {
-			return domain.GraphPlan{}, err
+			return domain.GraphPlan{}, false, fmt.Errorf("invalid graph plan: %w", err)
+		}
+		nodeWisp := issue.Ephemeral || issue.NoHistory
+		if i == 0 {
+			useWisp = nodeWisp
+		} else if nodeWisp != useWisp {
+			return domain.GraphPlan{}, false, fmt.Errorf("node %q: per-node ephemeral/no_history overrides must be uniform across the plan in proxied-server mode", n.Key)
 		}
 		nodes = append(nodes, domain.GraphNode{
 			Key:               n.Key,
@@ -479,44 +492,16 @@ func buildDomainGraphPlan(plan GraphApplyPlan, in createInput) (domain.GraphPlan
 	edges := make([]domain.GraphEdge, 0, len(plan.Edges))
 	for _, e := range plan.Edges {
 		edges = append(edges, domain.GraphEdge{
-			FromKey: e.FromKey,
-			FromID:  e.FromID,
-			ToKey:   e.ToKey,
-			ToID:    e.ToID,
-			Type:    graphApplyDependencyType(e.Type),
+			FromKey:    e.FromKey,
+			FromID:     e.FromID,
+			ToKey:      e.ToKey,
+			ToID:       e.ToID,
+			Type:       graphApplyDependencyType(e.Type),
+			Gate:       e.Gate,
+			SpawnerKey: e.SpawnerKey,
+			SpawnerID:  e.SpawnerID,
+			ThreadID:   e.ThreadID,
 		})
 	}
-	return domain.GraphPlan{Nodes: nodes, Edges: edges}, nil
-}
-
-func materializeGraphNodeIssue(n GraphApplyNode, in createInput) (*types.Issue, error) {
-	issueType := types.IssueType(n.Type)
-	if issueType == "" {
-		issueType = types.TypeTask
-	}
-	priority := 2
-	if n.Priority != nil {
-		priority = *n.Priority
-	}
-	var metadataJSON json.RawMessage
-	if len(n.Metadata) > 0 {
-		raw, err := json.Marshal(n.Metadata)
-		if err != nil {
-			return nil, HandleError("node %q: marshaling metadata: %v", n.Key, err)
-		}
-		metadataJSON = raw
-	}
-	return &types.Issue{
-		Title:       n.Title,
-		Description: n.Description,
-		IssueType:   issueType,
-		Status:      types.StatusOpen,
-		Priority:    priority,
-		Labels:      n.Labels,
-		Metadata:    metadataJSON,
-		Ephemeral:   in.ephemeral,
-		NoHistory:   in.noHistory,
-		CreatedBy:   in.createdBy,
-		Owner:       in.owner,
-	}, nil
+	return domain.GraphPlan{Nodes: nodes, Edges: edges}, useWisp, nil
 }

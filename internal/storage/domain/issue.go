@@ -189,6 +189,13 @@ type GraphEdge struct {
 	ToKey   string
 	ToID    string
 	Type    types.DependencyType
+	// Gate and spawner describe fanout-gate metadata for waits-for edges;
+	// SpawnerKey references a plan-local node and is resolved after IDs mint.
+	Gate       string
+	SpawnerKey string
+	SpawnerID  string
+	// ThreadID threads conversation edges (replies-to).
+	ThreadID string
 }
 
 type GraphApplyResult struct {
@@ -800,7 +807,7 @@ func (u *issueUseCaseImpl) applyGraph(ctx context.Context, plan GraphPlan, actor
 		if len(node.MetadataRefs) == 0 {
 			continue
 		}
-		merged := make(map[string]string, len(node.MetadataRefs))
+		merged := make(map[string]json.RawMessage, len(node.MetadataRefs))
 		if len(node.Issue.Metadata) > 0 {
 			if err := json.Unmarshal(node.Issue.Metadata, &merged); err != nil {
 				return GraphApplyResult{}, fmt.Errorf("applyGraph: node %q: re-parsing metadata: %w", node.Key, err)
@@ -811,7 +818,11 @@ func (u *issueUseCaseImpl) applyGraph(ctx context.Context, plan GraphPlan, actor
 			if !ok {
 				return GraphApplyResult{}, fmt.Errorf("applyGraph: node %q: metadata_ref %q references unknown key %q", node.Key, metaKey, refKey)
 			}
-			merged[metaKey] = resolvedID
+			idJSON, err := json.Marshal(resolvedID)
+			if err != nil {
+				return GraphApplyResult{}, fmt.Errorf("applyGraph: node %q: marshaling metadata ref %q: %w", node.Key, metaKey, err)
+			}
+			merged[metaKey] = idJSON
 		}
 		metaJSON, err := json.Marshal(merged)
 		if err != nil {
@@ -925,6 +936,26 @@ func (u *issueUseCaseImpl) applyGraph(ctx context.Context, plan GraphPlan, actor
 				IssueID:     fromID,
 				DependsOnID: toID,
 				Type:        depType,
+				ThreadID:    edge.ThreadID,
+			}
+			if edge.Gate != "" || edge.SpawnerKey != "" || edge.SpawnerID != "" {
+				gate := edge.Gate
+				if gate == "" {
+					gate = types.WaitsForAllChildren
+				}
+				spawnerID := edge.SpawnerID
+				if edge.SpawnerKey != "" {
+					resolved, ok := keyToID[edge.SpawnerKey]
+					if !ok {
+						return GraphApplyResult{}, fmt.Errorf("applyGraph: edge %d references undefined spawner_key %q", i, edge.SpawnerKey)
+					}
+					spawnerID = resolved
+				}
+				metaBytes, err := json.Marshal(types.WaitsForMeta{Gate: gate, SpawnerID: spawnerID})
+				if err != nil {
+					return GraphApplyResult{}, fmt.Errorf("applyGraph: edge %d: serializing waits-for metadata: %w", i, err)
+				}
+				dep.Metadata = string(metaBytes)
 			}
 			if err := u.depRepo.Insert(ctx, dep, actor, DepInsertOpts{UseWispsTable: useWisp}); err != nil {
 				return GraphApplyResult{}, fmt.Errorf("applyGraph: edge %d (%s -> %s): %w", i, fromID, toID, err)
