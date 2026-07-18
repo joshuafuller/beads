@@ -1,6 +1,6 @@
 -- Recompute wisps.is_blocked with a NULL-safe waits-for gate predicate.
 --
--- Twin of main migration 0052_recompute_null_gate_is_blocked.up.sql for the
+-- Twin of main migration 0056_recompute_null_gate_is_blocked.up.sql for the
 -- clone-local wisps table: ignored/0007 evaluated
 -- JSON_EXTRACT(d.metadata, '$.gate') = 'any-children' directly, so waits-for
 -- dependencies without gate metadata yielded NULL and poisoned the enclosing

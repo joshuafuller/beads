@@ -10,20 +10,20 @@
 -- rows mis-set by 0047 are repaired. The wisps-side twin is
 -- ignored/0013_recompute_null_gate_wisp_is_blocked.up.sql.
 --
--- The recompute reads the clone-local wisps/wisp_dependencies tables. Those
--- are dolt-ignored and are NOT present during the main-source migration pass
--- on a freshly materialized (baseline/remote-backed) clone, where there is no
--- persisted state to repair. Guard the recompute behind a wisps existence
--- check (mirroring migrations 0047/0053/0054/0055) so it no-ops when the wisp
--- tables are absent and runs the full issue+wisp recompute when they exist;
--- the NULL-safe runtime predicate in blocked_state.go repairs any later rows.
+-- The recompute joins the clone-local wisps/wisp_dependencies tables when
+-- they exist. Those are dolt-ignored and are NOT present during the
+-- main-source migration pass on a freshly materialized (baseline/remote-backed)
+-- clone — but issues/dependencies are dolt-versioned, so a fresh clone can
+-- still carry rows mis-set by 0047 and the issues repair must not be skipped
+-- there. Run the full issue+wisp recompute when the wisp tables exist and a
+-- wisp-free variant (issues/dependencies only) when they don't; ignored/0013
+-- repairs the wisp rows once the clone-local tables materialize.
 SET @has_wisps = (
     SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'wisps'
 );
 
-SET @sql = IF(@has_wisps > 0, 'UPDATE issues SET is_blocked = 0', 'SELECT 1');
-PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+UPDATE issues SET is_blocked = 0;
 
 SET @sql = IF(@has_wisps > 0,
 'WITH RECURSIVE
@@ -215,5 +215,66 @@ UPDATE issues
 SET is_blocked = 1
 WHERE id IN (SELECT id FROM reachable WHERE kind = ''issue'')
   AND status NOT IN (''closed'', ''pinned'')',
-    'SELECT 1');
+'WITH RECURSIVE
+  directly_blocked(id) AS (
+    SELECT DISTINCT i.id
+    FROM issues i
+    WHERE i.status NOT IN (''closed'', ''pinned'')
+      AND (
+        EXISTS (
+          SELECT 1
+          FROM dependencies d
+          JOIN issues t ON t.id = d.depends_on_issue_id
+          WHERE d.issue_id = i.id
+            AND d.type IN (''blocks'', ''conditional-blocks'')
+            AND t.status NOT IN (''closed'', ''pinned'')
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM dependencies d
+          WHERE d.issue_id = i.id
+            AND d.type = ''waits-for''
+            AND EXISTS (
+              SELECT 1
+              FROM dependencies cd
+              JOIN issues child ON child.id = cd.issue_id
+              WHERE cd.type = ''parent-child''
+                AND (
+                  (d.depends_on_issue_id IS NOT NULL AND cd.depends_on_issue_id = d.depends_on_issue_id)
+                  OR (d.depends_on_wisp_id IS NOT NULL AND cd.depends_on_wisp_id = d.depends_on_wisp_id)
+                )
+                AND child.status NOT IN (''closed'', ''pinned'')
+            )
+            AND NOT (
+              COALESCE(JSON_UNQUOTE(JSON_EXTRACT(d.metadata, ''$.gate'')), ''all-children'') = ''any-children''
+              AND EXISTS (
+                SELECT 1
+                FROM dependencies cd
+                JOIN issues child ON child.id = cd.issue_id
+                WHERE cd.type = ''parent-child''
+                  AND (
+                    (d.depends_on_issue_id IS NOT NULL AND cd.depends_on_issue_id = d.depends_on_issue_id)
+                    OR (d.depends_on_wisp_id IS NOT NULL AND cd.depends_on_wisp_id = d.depends_on_wisp_id)
+                  )
+                  AND child.status = ''closed''
+              )
+            )
+        )
+      )
+  ),
+  reachable(id) AS (
+    SELECT id FROM directly_blocked
+    UNION
+    SELECT d.issue_id
+    FROM reachable r
+    JOIN dependencies d
+      ON d.type = ''parent-child''
+     AND d.depends_on_issue_id = r.id
+    JOIN issues child ON child.id = d.issue_id
+    WHERE child.status NOT IN (''closed'', ''pinned'')
+  )
+UPDATE issues
+SET is_blocked = 1
+WHERE id IN (SELECT id FROM reachable)
+  AND status NOT IN (''closed'', ''pinned'')');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
