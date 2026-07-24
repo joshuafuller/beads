@@ -81,6 +81,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Proxied-server CI shard 1 flake: `TestProxiedServerCleanDatabases` ran a
+  server-global destructive command against the shared test container**
+  (p1-9lf, hazard tracked in p1-8dz). The test used the shared external Dolt
+  container under `t.Parallel()`, and `bd dolt clean-databases` drops every
+  database matching `staleDatabasePrefixes` on the server it is pointed at.
+  The container is bootstrapped with a database named `beads_test`
+  (`internal/testutil/container_provider.go`), which matches one of those
+  prefixes — so every run of this test dropped the shared container's own
+  bootstrap database out from under whatever sibling tests were mid-flight,
+  which is timing-correlated with the `busy buffer` / "pending schema
+  migrations alter pre-existing dirty tables" failures seen in
+  `TestProxiedServerDelete` and `TestProxiedServerFindDuplicates`. The test now
+  runs against a dedicated proxied server (`bdProxiedInit`), like the new purge
+  test, so its blast radius is its own server.
+
+- **`bd dolt clean-databases --purge-dropped` now works in proxied-server
+  mode** (p1-9lf). The command read the flag and then dropped it on the floor
+  before dispatching to the proxied-server implementation, so under
+  `--proxied-server` stale databases were dropped but never purged: their
+  directories stayed under `.dolt_dropped_databases/`, disk was never
+  reclaimed, and nothing reported that the flag had done nothing. The proxied
+  dual had drifted further than that one flag — it also lacked the
+  batching/circuit-breaker drop loop, the dry-run "purge ignored" notice, and
+  the `DOLT_UNDROP` recoverability trailer, and its early return on "nothing
+  stale found" was incompatible with purge semantics (a prior run's residue is
+  invisible to `SHOW DATABASES`, so `--purge-dropped` must still fire when this
+  run drops nothing). Both topologies now share one implementation keyed on
+  `versioncontrolops.DBConn`, which `*sql.DB` (direct server) and the pinned
+  non-transactional `*sql.Conn` (proxied server, via
+  `uow.MaintenanceProvider.RunNonTx`) both satisfy, so the behavior cannot
+  diverge again. Per-operation timeouts now derive from the command's context
+  on both paths, so Ctrl-C interrupts a long clean.
+
 - **`bd dolt clean-databases` gains an opt-in `--purge-dropped` flag to
   reclaim disk from what it drops** (be-pq5,
   [#3663](https://github.com/gastownhall/beads/pull/3663)). `DROP DATABASE`
