@@ -51,7 +51,7 @@ func listStaleDatabases(ctx context.Context, conn versioncontrolops.DBConn) ([]s
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return stale, rows.Close()
+	return stale, nil
 }
 
 func cleanDatabases(ctx context.Context, conn versioncontrolops.DBConn, opts cleanDatabasesOptions) error {
